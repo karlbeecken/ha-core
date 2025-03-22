@@ -54,7 +54,10 @@ class TadoChildLockSwitchEntity(TadoZoneEntity, SwitchEntity):
         super().__init__(zone_name, coordinator.home_id, zone_id, coordinator)
 
         self._device_info = device_info
-        self._device_id = self._device_info["shortSerialNo"]
+        if coordinator.is_x:
+            self._device_id = device_info["serialNumber"]
+        else:
+            self._device_id = device_info["shortSerialNo"]
         self._attr_unique_id = f"{zone_id} {coordinator.home_id} child-lock"
 
     async def async_turn_on(self, **kwargs: Any) -> None:

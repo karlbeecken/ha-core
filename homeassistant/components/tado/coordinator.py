@@ -25,6 +25,7 @@ from .const import (
     INSIDE_TEMPERATURE_MEASUREMENT,
     PRESET_AUTO,
     TEMP_OFFSET,
+    TYPE_HEATING,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ class TadoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             "geofence": {},
             "zone": {},
         }
+        self.is_x = False
 
     @property
     def fallback(self) -> str:
@@ -91,12 +93,27 @@ class TadoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             self.devices = await self.hass.async_add_executor_job(
                 self._tado.get_devices
             )
+            self.devices = [
+                (device if isinstance(device, dict) else device[0])
+                for device in self.devices
+            ]
         except RequestException as err:
             raise UpdateFailed(f"Error during Tado setup: {err}") from err
 
         tado_home = tado_home_call["homes"][0]
         self.home_id = tado_home["id"]
         self.home_name = tado_home["name"]
+        self.is_x = self._tado._http.is_x_line  # very bad™️
+        [
+            device.update(is_x=self.is_x)
+            for device in self.devices
+            if isinstance(device, dict)
+        ]
+        if self.is_x:
+            for z in self.zones:
+                z["type"] = TYPE_HEATING
+                z["name"] = z["roomName"]
+                z["id"] = z["roomId"]
 
         devices = await self._async_update_devices()
         zones = await self._async_update_zones()
@@ -140,24 +157,38 @@ class TadoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
         """Update the device data from Tado."""
         mapped_devices: dict[str, dict] = {}
         for device in devices:
-            device_short_serial_no = device["shortSerialNo"]
-            _LOGGER.debug("Updating device %s", device_short_serial_no)
-            try:
-                if (
-                    INSIDE_TEMPERATURE_MEASUREMENT
-                    in device["characteristics"]["capabilities"]
-                ):
-                    _LOGGER.debug(
-                        "Updating temperature offset for device %s",
-                        device_short_serial_no,
-                    )
-                    device[TEMP_OFFSET] = self._tado.get_device_info(
-                        device_short_serial_no, TEMP_OFFSET
-                    )
-            except RequestException as err:
-                _LOGGER.error(
-                    "Error updating device %s: %s", device_short_serial_no, err
+            if self.is_x:
+                device_short_serial_no = (
+                    device["serialNumber"]
+                    if isinstance(device, dict)
+                    else device[0]["serialNumber"]
                 )
+            else:
+                device_short_serial_no = device["shortSerialNo"]
+            _LOGGER.debug("Updating device %s", device_short_serial_no)
+
+            if self.is_x:
+                if isinstance(device, dict):
+                    device[TEMP_OFFSET] = device.get("temperatureOffset", 0)
+                else:
+                    _LOGGER.warning("Unexpected device format: %s", device)
+            else:
+                try:
+                    if (
+                        INSIDE_TEMPERATURE_MEASUREMENT
+                        in device["characteristics"]["capabilities"]
+                    ):
+                        _LOGGER.debug(
+                            "Updating temperature offset for device %s",
+                            device_short_serial_no,
+                        )
+                        device[TEMP_OFFSET] = self._tado.get_device_info(
+                            device_short_serial_no, TEMP_OFFSET
+                        )
+                except RequestException as err:  # TODO: need to remove?
+                    _LOGGER.error(
+                        "Error updating device %s: %s", device_short_serial_no, err
+                    )
 
             _LOGGER.debug(
                 "Device %s updated, with data: %s", device_short_serial_no, device
@@ -168,19 +199,23 @@ class TadoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
 
     async def _async_update_zones(self) -> dict[int, dict]:
         """Update the zone data from Tado."""
-
         try:
             zone_states_call = await self.hass.async_add_executor_job(
                 self._tado.get_zone_states
             )
-            zone_states = zone_states_call["zoneStates"]
+            if not self.is_x:
+                zone_states = zone_states_call["zoneStates"]
+            else:
+                zone_states = zone_states_call
         except RequestException as err:
             _LOGGER.error("Error updating Tado zones: %s", err)
             raise UpdateFailed(f"Error updating Tado zones: {err}") from err
 
         mapped_zones: dict[int, dict] = {}
         for zone in zone_states:
-            mapped_zones[int(zone)] = await self._update_zone(int(zone))
+            mapped_zones[
+                int(zone if not self.is_x else zone["id"])
+            ] = await self._update_zone(int(zone if not self.is_x else zone["id"]))
 
         return mapped_zones
 
@@ -219,6 +254,9 @@ class TadoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
 
     async def get_capabilities(self, zone_id: int | str) -> dict:
         """Fetch the capabilities from Tado."""
+
+        if self.is_x:
+            return {"type": TYPE_HEATING}
 
         try:
             return await self.hass.async_add_executor_job(
@@ -282,7 +320,7 @@ class TadoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             zone_id,
             overlay_mode,
             temperature,
-            duration,
+            int(duration) if duration else None,
             device_type,
             mode,
             fan_speed,
@@ -298,7 +336,7 @@ class TadoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 zone_id,
                 overlay_mode,
                 temperature,
-                duration,
+                int(duration) if duration else None,
                 device_type,
                 "ON",
                 mode,
