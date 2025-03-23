@@ -15,6 +15,6 @@
   "iot_class": "cloud_polling",
   "loggers": ["PyTado"],
   "requirements": [
-    "python-tado @ git+https://github.com/karlbeecken/PyTado.git@patch-1"
+    "python-tado==0.18.10"
   ]
 }
