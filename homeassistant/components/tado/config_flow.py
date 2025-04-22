@@ -74,8 +74,6 @@ class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Error while initiating Tado")
                 return self.async_abort(reason="cannot_connect")
             assert self.tado is not None
-            tado_device_url = self.tado.device_verification_url()
-            user_code = URL(tado_device_url).query["user_code"]
 
         async def _wait_for_login() -> None:
             """Wait for the user to login."""
@@ -107,6 +105,10 @@ class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             return self.async_show_progress_done(next_step_id="finish_login")
 
+        tado_device_url = self.tado.device_verification_url()
+        user_code = URL(tado_device_url).query["user_code"]
+        _LOGGER.debug("tado_device_url: %s Code: %s", tado_device_url, user_code)
+        
         return self.async_show_progress(
             step_id="user",
             progress_action="wait_for_device",
